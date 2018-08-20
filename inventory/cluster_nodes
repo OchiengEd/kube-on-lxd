@@ -1,0 +1,9 @@
+[controller]
+master
+
+[workers]
+worker0[1:4]
+
+[containers:children]
+workers
+controller

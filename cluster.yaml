@@ -1,0 +1,102 @@
+---
+- hosts: localhost
+  connection: local
+  name:  Cluster Build out
+  tasks:
+    - name: Create nodes for your Kubernetes Cluster
+      lxd_container:
+        state: started
+        name: '{{ item }}'
+        architecture: 'x86_64'
+        source:
+          type: image
+          mode: pull
+          protocol: simplestreams
+          server: https://cloud-images.ubuntu.com/releases
+          alias: "18.04"
+        profiles: ['default']
+        wait_for_ipv4_addresses: true
+        timeout: 600
+      with_items:
+        - '{{ groups.containers }}'
+      register: container_info
+
+    - name: Update /etc/hosts file with container IP address
+      lineinfile:
+        path: /etc/hosts
+        state: present
+        line: '{{ item.addresses.eth0.0 }}  {{ item.item }}' 
+      with_items:
+        - '{{ container_info.results }}'
+
+    - name: Configure kernel parametes
+      sysctl:
+        name: '{{ item.name }}'
+        value: '{{ item.name }}'
+        sysctl_set: yes
+        state: present
+      with_items:
+        - { 'name': 'fs.inotify.max_user_instances', 'value': '1048576'}
+        - { 'name': 'fs.inotify.max_queued_events', 'value': '1048576'}
+        - { 'name': 'fs.inotify.max_user_watches', 'value': '1048576'}
+        - { 'name': 'vm.max_map_count', 'value': '262144'}
+
+    - name: Wait for SSH to become ready
+      wait_for:
+        port: 22
+        host: '{{ item }}'
+        delay: 2
+      with_items:
+        - '{{ groups.containers }}'
+
+- name: Kubernetes nodes setup
+  hosts: containers
+  become: true
+  gather_facts: no
+  pre_tasks:
+    - name: Bootstrap python if missing
+      raw: apt-get update && apt-get install -y python-minimal
+    - setup:
+  tasks:
+
+    - name: Install dependencies via apt
+      apt:
+        name: '{{ item }}'
+        state: present
+      with_items:
+        - apt-transport-https
+        - ca-certificates
+        - curl
+        - software-properties-common
+
+    - name: Add docker repository key
+      apt_key:
+        url: 'https://download.docker.com/linux/ubuntu/gpg'
+        state: present
+
+    - name: Add docker repository
+      apt_repository:
+        update_cache: false
+        repo: 'deb [arch=amd64] https://download.docker.com/linux/ubuntu bionic stable'
+        state: present
+
+    - name: Add Kubernetes repository key
+      apt_key:
+        url: https://packages.cloud.google.com/apt/doc/apt-key.gpg
+        state: present
+
+    - name: Add Kubernetes repository
+      apt_repository:
+        update_cache: true
+        repo: 'deb http://apt.kubernetes.io/ kubernetes-xenial main'
+        state: present
+
+    - name: Install docker and kubernetes packages
+      apt:
+        name: '{{ item }}' 
+        state: present
+      with_items:
+        - docker-ce
+        - kubeadm
+        - kubectl
+        - kubelet
